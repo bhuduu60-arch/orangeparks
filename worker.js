@@ -29,7 +29,6 @@ function nowSec() { return Math.floor(Date.now() / 1000); }
 function isAdmin(env, userId) { return String(userId) === String(env.ADMIN_ID); }
 
 function adminTarget(env) {
-  // Prefer group (more reliable), fallback to your user id
   return env.ADMIN_GROUP_ID ? Number(env.ADMIN_GROUP_ID) : Number(env.ADMIN_ID);
 }
 
@@ -50,6 +49,26 @@ async function sendMenu(env, chatId) {
     text: "🍊 OrangePark Tips\nChoose an option below:",
     reply_markup: MENU
   });
+}
+
+function randomAnalysis() {
+  const n = Math.floor(Math.random() * 90) + 10; // 10-99
+  const odds = (Math.random() * (2.50 - 1.20) + 1.20).toFixed(2);
+  return { n, odds };
+}
+
+async function cronPost(env) {
+  const chat = env.CRON_POST_CHAT;
+  if (!chat) return;
+
+  const a = randomAnalysis();
+  const text =
+    "🍊 OrangePark Minute Analysis\n\n" +
+    "Confidence: " + a.n + "%\n" +
+    "Target Odds: " + a.odds + "\n\n" +
+    "📢 Join our channel for daily tips:\n" + FREE_CHANNEL;
+
+  await tg(env, "sendMessage", { chat_id: chat, text });
 }
 
 async function handleMessage(env, msg) {
@@ -97,7 +116,6 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "Denied " + userId });
   }
 
-  // Payment proof
   if (msg.photo || msg.document) {
     const target = adminTarget(env);
 
@@ -171,5 +189,9 @@ export default {
     if (update.message) await handleMessage(env, update.message);
 
     return json({ ok: true });
+  },
+
+  async scheduled(event, env) {
+    await cronPost(env);
   }
 };
