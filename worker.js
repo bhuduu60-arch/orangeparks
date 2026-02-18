@@ -104,13 +104,22 @@ async function setVipWeek(env, userId) {
   return until;
 }
 
-async function getText(env, key, fallback) {
+async function getCfg(env, key, fallback) {
   const v = await env.CONTENT.get(`cfg:${key}`);
   return v || fallback;
 }
 
+async function setCfg(env, key, value) {
+  await env.CONTENT.put(`cfg:${key}`, value);
+}
+
+function cmdValue(text, cmd) {
+  // returns everything after "/cmd " (with the space)
+  return text.slice(cmd.length + 2);
+}
+
 async function sendMenu(env, chatId) {
-  const welcome = await getText(env, "welcome", DEFAULTS.welcome);
+  const welcome = await getCfg(env, "welcome", DEFAULTS.welcome);
   return tg(env, "sendMessage", { chat_id: chatId, text: welcome, reply_markup: MENU });
 }
 
@@ -122,23 +131,35 @@ async function handleMessage(env, msg) {
 
   await ensureUser(env, fromId);
 
-  if (env.LIVE_ALERTS === "1") {
-    await tg(env, "sendMessage", {
-      chat_id: adminTarget(env),
-      text: `👤 Active user: ${fromId}\nText: ${text || "[non-text]"}`.slice(0, 4000)
-    });
-  }
-
   if (text === "/start" || text === "/menu") return sendMenu(env, chatId);
 
-  // Admin: set welcome
+  // ---- Admin panel commands ----
   if (text.startsWith("/setwelcome ") && isAdmin(env, fromId)) {
-    const w = text.slice(12);
-    await env.CONTENT.put("cfg:welcome", w);
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Welcome message updated." });
+    await setCfg(env, "welcome", cmdValue(text, "setwelcome"));
+    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Welcome updated." });
   }
 
-  // Admin stats & broadcast
+  if (text.startsWith("/setjoin ") && isAdmin(env, fromId)) {
+    await setCfg(env, "join", cmdValue(text, "setjoin"));
+    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Join channel link updated." });
+  }
+
+  if (text.startsWith("/setprice ") && isAdmin(env, fromId)) {
+    await setCfg(env, "vipPay", cmdValue(text, "setprice"));
+    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ VIP payment text updated." });
+  }
+
+  if (text.startsWith("/setviplink ") && isAdmin(env, fromId)) {
+    await setCfg(env, "vipInvite", cmdValue(text, "setviplink"));
+    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ VIP invite link updated." });
+  }
+
+  if (text.startsWith("/setcontact ") && isAdmin(env, fromId)) {
+    await setCfg(env, "contact", cmdValue(text, "setcontact"));
+    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Contact updated." });
+  }
+
+  // ---- Existing admin stuff ----
   if (text === "/stats" && isAdmin(env, fromId)) {
     const users = (await env.CONTENT.get("stats:users")) || "0";
     const subs = (await env.CONTENT.get("stats:subs")) || "0";
@@ -154,18 +175,16 @@ async function handleMessage(env, msg) {
     });
   }
 
-  // Admin: set free tips
   if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
     const tips = text.slice(9);
     await env.CONTENT.put("free_tips", tips);
     return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Free tips updated." });
   }
 
-  // Admin: approve/deny VIP
   if (text.startsWith("/approve ") && isAdmin(env, fromId)) {
     const userId = text.split(/\s+/)[1];
     const until = await setVipWeek(env, userId);
-    const vipInvite = env.VIP_CHANNEL_INVITE || DEFAULTS.vipInvite;
+    const vipInvite = await getCfg(env, "vipInvite", DEFAULTS.vipInvite);
 
     await tg(env, "sendMessage", {
       chat_id: userId,
@@ -207,7 +226,7 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Proof received. Waiting for confirmation." });
   }
 
-  // Buttons
+  // ---- Buttons ----
   if (text === "🆓 Free Tips") {
     const tips = (await env.CONTENT.get("free_tips")) || "No free tips posted yet.";
     return tg(env, "sendMessage", { chat_id: chatId, text: tips });
@@ -215,8 +234,8 @@ async function handleMessage(env, msg) {
 
   if (text === "🔒 VIP Tips") {
     const until = await getVipUntil(env, fromId);
-    const vipInvite = env.VIP_CHANNEL_INVITE || DEFAULTS.vipInvite;
-    const vipPay = env.VIP_PAYMENT_TEXT || DEFAULTS.vipPay;
+    const vipInvite = await getCfg(env, "vipInvite", DEFAULTS.vipInvite);
+    const vipPay = await getCfg(env, "vipPay", DEFAULTS.vipPay);
 
     if (until > nowSec()) {
       return tg(env, "sendMessage", {
@@ -237,7 +256,7 @@ async function handleMessage(env, msg) {
   }
 
   if (text === "📢 Join Channel") {
-    const link = await getText(env, "join", DEFAULTS.freeChannel);
+    const link = await getCfg(env, "join", DEFAULTS.freeChannel);
     return tg(env, "sendMessage", { chat_id: chatId, text: "📢 Free channel:\n" + link });
   }
 
@@ -256,8 +275,8 @@ async function handleMessage(env, msg) {
   }
 
   if (text === "ℹ️ Info") {
-    const contact = await getText(env, "contact", DEFAULTS.contact);
-    const link = await getText(env, "join", DEFAULTS.freeChannel);
+    const contact = await getCfg(env, "contact", DEFAULTS.contact);
+    const link = await getCfg(env, "join", DEFAULTS.freeChannel);
     return tg(env, "sendMessage", {
       chat_id: chatId,
       text:
