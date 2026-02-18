@@ -68,6 +68,12 @@ async function handleMessage(env, msg) {
   }
 
   // Admin commands
+  if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
+    const tips = text.replace("/setfree ", "");
+    await env.CONTENT.put("free_tips", tips);
+    return tg("sendMessage", token, { chat_id: chatId, text: "✅ Free tips updated." });
+  }
+
   if (text.startsWith("/approve ") && isAdmin(env, fromId)) {
     const userId = text.split(/\s+/)[1];
     const until = await setVipWeek(env, userId);
