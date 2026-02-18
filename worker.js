@@ -60,6 +60,10 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "Your ID: " + String(fromId) });
   }
 
+  if (text === "/admincheck") {
+    return tg(env, "sendMessage", { chat_id: chatId, text: "fromId=" + String(fromId) + " admin=" + String(env.ADMIN_ID) });
+  }
+
   if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
     const tips = text.slice(9);
     await env.CONTENT.put("free_tips", tips);
