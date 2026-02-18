@@ -59,6 +59,10 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "Your ID: " + String(fromId) });
   }
 
+  if (text === "/chatid") {
+    return tg(env, "sendMessage", { chat_id: chatId, text: "Chat ID: " + String(chatId) });
+  }
+
   // Admin: update free tips
   if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
     const tips = text.slice(9);
@@ -92,6 +96,7 @@ async function handleMessage(env, msg) {
 
   // Payment proof
   if (msg.photo || msg.document) {
+    // forward to admin user id
     await tg(env, "forwardMessage", {
       chat_id: env.ADMIN_ID,
       from_chat_id: chatId,
