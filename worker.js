@@ -68,8 +68,9 @@ async function handleMessage(env, msg) {
   }
 
   if (text === "/myid") {
-    return tg("sendMessage", token, { chat_id: chatId, text: `Your ID: ` });
+    return tg("sendMessage", token, { chat_id: chatId, text: "Your ID: " + String(fromId) });
   }
+
 
   // Admin commands
   if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
