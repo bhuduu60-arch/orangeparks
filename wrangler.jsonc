@@ -1,5 +1,9 @@
 {
   "name": "orangeparks",
   "main": "worker.js",
-  "compatibility_date": "2026-02-17"
+  "compatibility_date": "2026-02-17",
+  "kv_namespaces": [
+    { "binding": "VIP", "id": "7b33e85698d44afb879028c5ade3095b" },
+    { "binding": "CONTENT", "id": "cefc79bf578d4ccea88762b678abf8a8" }
+  ]
 }
