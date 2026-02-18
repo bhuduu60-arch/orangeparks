@@ -7,7 +7,18 @@ const MENU = {
   resize_keyboard: true
 };
 
-const FREE_CHANNEL = "https://t.me/toxicpuntertips";
+const DEFAULTS = {
+  freeChannel: "https://t.me/toxicpuntertips",
+  contact: "@Olami2501",
+  vipInvite: "https://t.me/+w-CG6u7jog42YjY0",
+  vipPay:
+    "💳 VIP PAYMENT (7 days) — ₦5,000\n\n" +
+    "Bank: OPay\n" +
+    "Account Name: Lukmon Fatai Olamide",
+  welcome:
+    "🍊 OrangePark Tips\n" +
+    "Choose an option below:"
+};
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -30,25 +41,11 @@ function nowSec() { return Math.floor(Date.now() / 1000); }
 function isAdmin(env, userId) { return String(userId) === String(env.ADMIN_ID); }
 function adminTarget(env) { return env.ADMIN_GROUP_ID ? Number(env.ADMIN_GROUP_ID) : Number(env.ADMIN_ID); }
 
-async function getVipUntil(env, userId) {
-  const v = await env.VIP.get(`vip:${userId}`);
-  return v ? Number(v) : 0;
-}
-
-async function setVipWeek(env, userId) {
-  const until = nowSec() + 7 * 24 * 3600;
-  await env.VIP.put(`vip:${userId}`, String(until), { expirationTtl: 8 * 24 * 3600 });
-  return until;
-}
-
-// ---- User tracking / subscribe ----
 async function ensureUser(env, userId) {
-  // store known users
   const key = `user:${userId}`;
   const existing = await env.CONTENT.get(key);
   if (!existing) {
     await env.CONTENT.put(key, "1");
-    // count
     const c = Number((await env.CONTENT.get("stats:users")) || "0") + 1;
     await env.CONTENT.put("stats:users", String(c));
   }
@@ -74,7 +71,6 @@ async function setSubscribed(env, userId, on) {
 }
 
 async function listSubscribers(env) {
-  // KV list is paginated; we’ll iterate a few pages (enough for small/medium bots).
   let cursor = undefined;
   const subs = [];
   for (let i = 0; i < 20; i++) {
@@ -89,7 +85,6 @@ async function listSubscribers(env) {
 async function broadcast(env, text) {
   const subs = await listSubscribers(env);
   let ok = 0, fail = 0;
-
   for (const id of subs) {
     const r = await tg(env, "sendMessage", { chat_id: id, text });
     if (r && r.ok) ok++;
@@ -98,13 +93,25 @@ async function broadcast(env, text) {
   return { total: subs.length, ok, fail };
 }
 
-// ---- Bot handlers ----
+async function getVipUntil(env, userId) {
+  const v = await env.VIP.get(`vip:${userId}`);
+  return v ? Number(v) : 0;
+}
+
+async function setVipWeek(env, userId) {
+  const until = nowSec() + 7 * 24 * 3600;
+  await env.VIP.put(`vip:${userId}`, String(until), { expirationTtl: 8 * 24 * 3600 });
+  return until;
+}
+
+async function getText(env, key, fallback) {
+  const v = await env.CONTENT.get(`cfg:${key}`);
+  return v || fallback;
+}
+
 async function sendMenu(env, chatId) {
-  return tg(env, "sendMessage", {
-    chat_id: chatId,
-    text: "🍊 OrangePark Tips\nChoose an option below:",
-    reply_markup: MENU
-  });
+  const welcome = await getText(env, "welcome", DEFAULTS.welcome);
+  return tg(env, "sendMessage", { chat_id: chatId, text: welcome, reply_markup: MENU });
 }
 
 async function handleMessage(env, msg) {
@@ -115,7 +122,6 @@ async function handleMessage(env, msg) {
 
   await ensureUser(env, fromId);
 
-  // Optional: “someone is using the bot now”
   if (env.LIVE_ALERTS === "1") {
     await tg(env, "sendMessage", {
       chat_id: adminTarget(env),
@@ -125,17 +131,18 @@ async function handleMessage(env, msg) {
 
   if (text === "/start" || text === "/menu") return sendMenu(env, chatId);
 
-  // Admin utilities
+  // Admin: set welcome
+  if (text.startsWith("/setwelcome ") && isAdmin(env, fromId)) {
+    const w = text.slice(12);
+    await env.CONTENT.put("cfg:welcome", w);
+    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Welcome message updated." });
+  }
+
+  // Admin stats & broadcast
   if (text === "/stats" && isAdmin(env, fromId)) {
     const users = (await env.CONTENT.get("stats:users")) || "0";
     const subs = (await env.CONTENT.get("stats:subs")) || "0";
     return tg(env, "sendMessage", { chat_id: chatId, text: `📊 Stats\nUsers: ${users}\nSubscribers: ${subs}` });
-  }
-
-  if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
-    const tips = text.slice(9);
-    await env.CONTENT.put("free_tips", tips);
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Free tips updated." });
   }
 
   if (text.startsWith("/broadcast ") && isAdmin(env, fromId)) {
@@ -147,15 +154,24 @@ async function handleMessage(env, msg) {
     });
   }
 
+  // Admin: set free tips
+  if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
+    const tips = text.slice(9);
+    await env.CONTENT.put("free_tips", tips);
+    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Free tips updated." });
+  }
+
+  // Admin: approve/deny VIP
   if (text.startsWith("/approve ") && isAdmin(env, fromId)) {
     const userId = text.split(/\s+/)[1];
     const until = await setVipWeek(env, userId);
+    const vipInvite = env.VIP_CHANNEL_INVITE || DEFAULTS.vipInvite;
 
     await tg(env, "sendMessage", {
       chat_id: userId,
       text:
         "✅ Payment confirmed!\nVIP activated for 7 days.\n\n" +
-        (env.VIP_CHANNEL_INVITE ? ("VIP Channel:\n" + env.VIP_CHANNEL_INVITE) : "")
+        (vipInvite ? ("VIP Channel:\n" + vipInvite) : "")
     });
 
     return tg(env, "sendMessage", {
@@ -199,29 +215,30 @@ async function handleMessage(env, msg) {
 
   if (text === "🔒 VIP Tips") {
     const until = await getVipUntil(env, fromId);
+    const vipInvite = env.VIP_CHANNEL_INVITE || DEFAULTS.vipInvite;
+    const vipPay = env.VIP_PAYMENT_TEXT || DEFAULTS.vipPay;
 
     if (until > nowSec()) {
-      const link = env.VIP_CHANNEL_INVITE || "";
       return tg(env, "sendMessage", {
         chat_id: chatId,
         text:
           "✅ VIP Active\nExpires: " + new Date(until * 1000).toUTCString() + "\n\n" +
-          (link ? ("VIP Channel:\n" + link) : "")
+          (vipInvite ? ("VIP Channel:\n" + vipInvite) : "")
       });
     }
 
-    const pay = env.VIP_PAYMENT_TEXT || "Payment details not set yet.";
     return tg(env, "sendMessage", {
       chat_id: chatId,
       text:
         "🔒 VIP locked (7 days access)\n\n" +
-        pay +
+        vipPay +
         "\n\nAfter payment, tap 🧾 Send Payment Proof and upload screenshot."
     });
   }
 
   if (text === "📢 Join Channel") {
-    return tg(env, "sendMessage", { chat_id: chatId, text: "📢 Free channel:\n" + FREE_CHANNEL });
+    const link = await getText(env, "join", DEFAULTS.freeChannel);
+    return tg(env, "sendMessage", { chat_id: chatId, text: "📢 Free channel:\n" + link });
   }
 
   if (text === "🧾 Send Payment Proof") {
@@ -230,10 +247,7 @@ async function handleMessage(env, msg) {
 
   if (text === "🔔 Subscribe") {
     await setSubscribed(env, fromId, true);
-    return tg(env, "sendMessage", {
-      chat_id: chatId,
-      text: "✅ Subscribed.\nYou will receive free tip updates from this bot.\n\nTo stop: send /unsub"
-    });
+    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Subscribed.\nTo stop: send /unsub" });
   }
 
   if (text === "/unsub") {
@@ -242,13 +256,14 @@ async function handleMessage(env, msg) {
   }
 
   if (text === "ℹ️ Info") {
-    const handle = env.CONTACT_USERNAME || "@Olami2501";
+    const contact = await getText(env, "contact", DEFAULTS.contact);
+    const link = await getText(env, "join", DEFAULTS.freeChannel);
     return tg(env, "sendMessage", {
       chat_id: chatId,
       text:
         "ℹ️ OrangePark Tips\n\n" +
-        "Contact admin: " + handle + "\n" +
-        "Free channel: " + FREE_CHANNEL
+        "Contact admin: " + contact + "\n" +
+        "Free channel: " + link
     });
   }
 
