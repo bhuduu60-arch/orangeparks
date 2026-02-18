@@ -1,6 +1,3 @@
-cd ~/orangeparks
-
-cat > worker.js <<'JS'
 const MENU = {
   keyboard: [
     [{ text: "🆓 Free Tips" }, { text: "🔒 VIP Tips" }],
@@ -54,27 +51,22 @@ async function handleMessage(env, msg) {
   const chatId = msg.chat.id;
   const fromId = msg.from?.id;
   const text = (msg.text || "").trim();
-
   if (!fromId) return;
 
   if (text === "/start" || text === "/menu") return sendMenu(env, chatId);
 
-  // debug/admin helpers
   if (text === "/myid") {
     return tg(env, "sendMessage", { chat_id: chatId, text: "Your ID: " + String(fromId) });
   }
-  if (text === "/admincheck") {
-    return tg(env, "sendMessage", { chat_id: chatId, text: "fromId=" + String(fromId) + " admin=" + String(env.ADMIN_ID) });
-  }
 
-  // ADMIN: set free tips text
+  // Admin: update free tips
   if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
     const tips = text.slice(9);
     await env.CONTENT.put("free_tips", tips);
     return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Free tips updated." });
   }
 
-  // ADMIN: approve / deny VIP (manual confirmation)
+  // Admin: approve / deny
   if (text.startsWith("/approve ") && isAdmin(env, fromId)) {
     const userId = text.split(/\s+/)[1];
     const until = await setVipWeek(env, userId);
@@ -82,8 +74,7 @@ async function handleMessage(env, msg) {
     await tg(env, "sendMessage", {
       chat_id: userId,
       text:
-        "✅ Payment confirmed!\n" +
-        "VIP activated for 7 days.\n\n" +
+        "✅ Payment confirmed!\nVIP activated for 7 days.\n\n" +
         (env.VIP_CHANNEL_INVITE ? ("VIP Channel:\n" + env.VIP_CHANNEL_INVITE) : "")
     });
 
@@ -99,7 +90,7 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "Denied " + userId });
   }
 
-  // Payment proof: forward to admin (you)
+  // Payment proof
   if (msg.photo || msg.document) {
     await tg(env, "forwardMessage", {
       chat_id: env.ADMIN_ID,
@@ -110,8 +101,7 @@ async function handleMessage(env, msg) {
     await tg(env, "sendMessage", {
       chat_id: env.ADMIN_ID,
       text:
-        "🧾 Proof received.\n" +
-        "User ID: " + fromId + "\n\n" +
+        "🧾 Proof received.\nUser ID: " + fromId + "\n\n" +
         "Approve: /approve " + fromId + "\n" +
         "Deny: /deny " + fromId
     });
@@ -119,7 +109,7 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Proof received. Waiting for confirmation." });
   }
 
-  // Buttons (reply keyboard)
+  // Buttons
   if (text === "🆓 Free Tips") {
     const tips = (await env.CONTENT.get("free_tips")) || "No free tips posted yet.";
     return tg(env, "sendMessage", { chat_id: chatId, text: tips });
@@ -128,19 +118,16 @@ async function handleMessage(env, msg) {
   if (text === "🔒 VIP Tips") {
     const until = await getVipUntil(env, fromId);
 
-    // VIP active
     if (until > nowSec()) {
       const link = env.VIP_CHANNEL_INVITE || "";
       return tg(env, "sendMessage", {
         chat_id: chatId,
         text:
-          "✅ VIP Active\n" +
-          "Expires: " + new Date(until * 1000).toUTCString() + "\n\n" +
+          "✅ VIP Active\nExpires: " + new Date(until * 1000).toUTCString() + "\n\n" +
           (link ? ("VIP Channel:\n" + link) : "")
       });
     }
 
-    // VIP locked (show payment info)
     const pay = env.VIP_PAYMENT_TEXT || "Payment details not set yet.";
     return tg(env, "sendMessage", {
       chat_id: chatId,
@@ -156,10 +143,7 @@ async function handleMessage(env, msg) {
   }
 
   if (text === "🧾 Send Payment Proof") {
-    return tg(env, "sendMessage", {
-      chat_id: chatId,
-      text: "🧾 Upload your payment screenshot (photo or document) here."
-    });
+    return tg(env, "sendMessage", { chat_id: chatId, text: "🧾 Upload your payment screenshot (photo or document) here." });
   }
 
   return tg(env, "sendMessage", { chat_id: chatId, text: "Type /menu" });
@@ -181,4 +165,3 @@ export default {
     return json({ ok: true });
   }
 };
-JS
