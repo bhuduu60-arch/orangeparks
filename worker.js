@@ -1,7 +1,8 @@
 const MENU = {
   keyboard: [
     [{ text: "🆓 Free Tips" }, { text: "🔒 VIP Tips" }],
-    [{ text: "📢 Join Channel" }, { text: "🧾 Send Payment Proof" }]
+    [{ text: "📢 Join Channel" }, { text: "🧾 Send Payment Proof" }],
+    [{ text: "🔔 Subscribe" }, { text: "ℹ️ Info" }]
   ],
   resize_keyboard: true
 };
@@ -27,10 +28,7 @@ async function tg(env, method, payload) {
 
 function nowSec() { return Math.floor(Date.now() / 1000); }
 function isAdmin(env, userId) { return String(userId) === String(env.ADMIN_ID); }
-
-function adminTarget(env) {
-  return env.ADMIN_GROUP_ID ? Number(env.ADMIN_GROUP_ID) : Number(env.ADMIN_ID);
-}
+function adminTarget(env) { return env.ADMIN_GROUP_ID ? Number(env.ADMIN_GROUP_ID) : Number(env.ADMIN_ID); }
 
 async function getVipUntil(env, userId) {
   const v = await env.VIP.get(`vip:${userId}`);
@@ -43,6 +41,64 @@ async function setVipWeek(env, userId) {
   return until;
 }
 
+// ---- User tracking / subscribe ----
+async function ensureUser(env, userId) {
+  // store known users
+  const key = `user:${userId}`;
+  const existing = await env.CONTENT.get(key);
+  if (!existing) {
+    await env.CONTENT.put(key, "1");
+    // count
+    const c = Number((await env.CONTENT.get("stats:users")) || "0") + 1;
+    await env.CONTENT.put("stats:users", String(c));
+  }
+}
+
+async function setSubscribed(env, userId, on) {
+  const key = `sub:${userId}`;
+  if (on) {
+    const was = await env.CONTENT.get(key);
+    if (!was) {
+      await env.CONTENT.put(key, "1");
+      const c = Number((await env.CONTENT.get("stats:subs")) || "0") + 1;
+      await env.CONTENT.put("stats:subs", String(c));
+    }
+  } else {
+    const was = await env.CONTENT.get(key);
+    if (was) {
+      await env.CONTENT.delete(key);
+      const c = Math.max(0, Number((await env.CONTENT.get("stats:subs")) || "0") - 1);
+      await env.CONTENT.put("stats:subs", String(c));
+    }
+  }
+}
+
+async function listSubscribers(env) {
+  // KV list is paginated; we’ll iterate a few pages (enough for small/medium bots).
+  let cursor = undefined;
+  const subs = [];
+  for (let i = 0; i < 20; i++) {
+    const page = await env.CONTENT.list({ prefix: "sub:", cursor });
+    for (const k of page.keys) subs.push(k.name.slice(4));
+    if (!page.list_complete) cursor = page.cursor;
+    else break;
+  }
+  return subs;
+}
+
+async function broadcast(env, text) {
+  const subs = await listSubscribers(env);
+  let ok = 0, fail = 0;
+
+  for (const id of subs) {
+    const r = await tg(env, "sendMessage", { chat_id: id, text });
+    if (r && r.ok) ok++;
+    else fail++;
+  }
+  return { total: subs.length, ok, fail };
+}
+
+// ---- Bot handlers ----
 async function sendMenu(env, chatId) {
   return tg(env, "sendMessage", {
     chat_id: chatId,
@@ -51,46 +107,44 @@ async function sendMenu(env, chatId) {
   });
 }
 
-function randomAnalysis() {
-  const n = Math.floor(Math.random() * 90) + 10; // 10-99
-  const odds = (Math.random() * (2.50 - 1.20) + 1.20).toFixed(2);
-  return { n, odds };
-}
-
-async function cronPost(env) {
-  const chat = env.CRON_POST_CHAT;
-  if (!chat) return;
-
-  const a = randomAnalysis();
-  const text =
-    "🍊 OrangePark Minute Analysis\n\n" +
-    "Confidence: " + a.n + "%\n" +
-    "Target Odds: " + a.odds + "\n\n" +
-    "📢 Join our channel for daily tips:\n" + FREE_CHANNEL;
-
-  await tg(env, "sendMessage", { chat_id: chat, text });
-}
-
 async function handleMessage(env, msg) {
   const chatId = msg.chat.id;
   const fromId = msg.from?.id;
   const text = (msg.text || "").trim();
   if (!fromId) return;
 
-  if (text === "/start" || text === "/menu") return sendMenu(env, chatId);
+  await ensureUser(env, fromId);
 
-  if (text === "/myid") {
-    return tg(env, "sendMessage", { chat_id: chatId, text: "Your ID: " + String(fromId) });
+  // Optional: “someone is using the bot now”
+  if (env.LIVE_ALERTS === "1") {
+    await tg(env, "sendMessage", {
+      chat_id: adminTarget(env),
+      text: `👤 Active user: ${fromId}\nText: ${text || "[non-text]"}`.slice(0, 4000)
+    });
   }
 
-  if (text === "/chatid") {
-    return tg(env, "sendMessage", { chat_id: chatId, text: "Chat ID: " + String(chatId) });
+  if (text === "/start" || text === "/menu") return sendMenu(env, chatId);
+
+  // Admin utilities
+  if (text === "/stats" && isAdmin(env, fromId)) {
+    const users = (await env.CONTENT.get("stats:users")) || "0";
+    const subs = (await env.CONTENT.get("stats:subs")) || "0";
+    return tg(env, "sendMessage", { chat_id: chatId, text: `📊 Stats\nUsers: ${users}\nSubscribers: ${subs}` });
   }
 
   if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
     const tips = text.slice(9);
     await env.CONTENT.put("free_tips", tips);
     return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Free tips updated." });
+  }
+
+  if (text.startsWith("/broadcast ") && isAdmin(env, fromId)) {
+    const msgText = text.slice(11);
+    const res = await broadcast(env, msgText);
+    return tg(env, "sendMessage", {
+      chat_id: chatId,
+      text: `📣 Broadcast done\nTotal: ${res.total}\nSent: ${res.ok}\nFailed: ${res.fail}`
+    });
   }
 
   if (text.startsWith("/approve ") && isAdmin(env, fromId)) {
@@ -116,6 +170,7 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "Denied " + userId });
   }
 
+  // Payment proof
   if (msg.photo || msg.document) {
     const target = adminTarget(env);
 
@@ -136,6 +191,7 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Proof received. Waiting for confirmation." });
   }
 
+  // Buttons
   if (text === "🆓 Free Tips") {
     const tips = (await env.CONTENT.get("free_tips")) || "No free tips posted yet.";
     return tg(env, "sendMessage", { chat_id: chatId, text: tips });
@@ -172,6 +228,30 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "🧾 Upload your payment screenshot (photo or document) here." });
   }
 
+  if (text === "🔔 Subscribe") {
+    await setSubscribed(env, fromId, true);
+    return tg(env, "sendMessage", {
+      chat_id: chatId,
+      text: "✅ Subscribed.\nYou will receive free tip updates from this bot.\n\nTo stop: send /unsub"
+    });
+  }
+
+  if (text === "/unsub") {
+    await setSubscribed(env, fromId, false);
+    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Unsubscribed." });
+  }
+
+  if (text === "ℹ️ Info") {
+    const handle = env.CONTACT_USERNAME || "@Olami2501";
+    return tg(env, "sendMessage", {
+      chat_id: chatId,
+      text:
+        "ℹ️ OrangePark Tips\n\n" +
+        "Contact admin: " + handle + "\n" +
+        "Free channel: " + FREE_CHANNEL
+    });
+  }
+
   return tg(env, "sendMessage", { chat_id: chatId, text: "Type /menu" });
 }
 
@@ -189,9 +269,5 @@ export default {
     if (update.message) await handleMessage(env, update.message);
 
     return json({ ok: true });
-  },
-
-  async scheduled(event, env) {
-    await cronPost(env);
   }
 };
