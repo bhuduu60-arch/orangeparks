@@ -67,6 +67,10 @@ async function handleMessage(env, msg) {
     return sendMenu(env, chatId);
   }
 
+  if (text === "/myid") {
+    return tg("sendMessage", token, { chat_id: chatId, text: `Your ID: ` });
+  }
+
   // Admin commands
   if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
     const tips = text.replace("/setfree ", "");
