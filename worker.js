@@ -15,9 +15,7 @@ const DEFAULTS = {
     "💳 VIP PAYMENT (7 days) — ₦5,000\n\n" +
     "Bank: OPay\n" +
     "Account Name: Lukmon Fatai Olamide",
-  welcome:
-    "🍊 OrangePark Tips\n" +
-    "Choose an option below:"
+  welcome: "🍊 OrangePark Tips\nChoose an option below:"
 };
 
 function json(data, status = 200) {
@@ -73,7 +71,7 @@ async function setSubscribed(env, userId, on) {
 async function listSubscribers(env) {
   let cursor = undefined;
   const subs = [];
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 50; i++) {
     const page = await env.CONTENT.list({ prefix: "sub:", cursor });
     for (const k of page.keys) subs.push(k.name.slice(4));
     if (!page.list_complete) cursor = page.cursor;
@@ -82,11 +80,22 @@ async function listSubscribers(env) {
   return subs;
 }
 
-async function broadcast(env, text) {
+async function broadcastText(env, text) {
   const subs = await listSubscribers(env);
   let ok = 0, fail = 0;
   for (const id of subs) {
     const r = await tg(env, "sendMessage", { chat_id: id, text });
+    if (r && r.ok) ok++;
+    else fail++;
+  }
+  return { total: subs.length, ok, fail };
+}
+
+async function broadcastPhoto(env, fileId, caption = "") {
+  const subs = await listSubscribers(env);
+  let ok = 0, fail = 0;
+  for (const id of subs) {
+    const r = await tg(env, "sendPhoto", { chat_id: id, photo: fileId, caption });
     if (r && r.ok) ok++;
     else fail++;
   }
@@ -108,185 +117,13 @@ async function getCfg(env, key, fallback) {
   const v = await env.CONTENT.get(`cfg:${key}`);
   return v || fallback;
 }
+async function setCfg(env, key, value) { await env.CONTENT.put(`cfg:${key}`, value); }
 
-async function setCfg(env, key, value) {
-  await env.CONTENT.put(`cfg:${key}`, value);
-}
-
-function cmdValue(text, cmd) {
-  // returns everything after "/cmd " (with the space)
-  return text.slice(cmd.length + 2);
-}
+function cmdValue(text, cmd) { return text.slice(cmd.length + 2); }
 
 async function sendMenu(env, chatId) {
   const welcome = await getCfg(env, "welcome", DEFAULTS.welcome);
   return tg(env, "sendMessage", { chat_id: chatId, text: welcome, reply_markup: MENU });
-}
-
-async function handleMessage(env, msg) {
-  const chatId = msg.chat.id;
-  const fromId = msg.from?.id;
-  const text = (msg.text || "").trim();
-  if (!fromId) return;
-
-  await ensureUser(env, fromId);
-
-  if (text === "/start" || text === "/menu") return sendMenu(env, chatId);
-
-  // ---- Admin panel commands ----
-  if (text.startsWith("/setwelcome ") && isAdmin(env, fromId)) {
-    await setCfg(env, "welcome", cmdValue(text, "setwelcome"));
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Welcome updated." });
-  }
-
-  if (text.startsWith("/setjoin ") && isAdmin(env, fromId)) {
-    await setCfg(env, "join", cmdValue(text, "setjoin"));
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Join channel link updated." });
-  }
-
-  if (text.startsWith("/setprice ") && isAdmin(env, fromId)) {
-    await setCfg(env, "vipPay", cmdValue(text, "setprice"));
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ VIP payment text updated." });
-  }
-
-  if (text.startsWith("/setviplink ") && isAdmin(env, fromId)) {
-    await setCfg(env, "vipInvite", cmdValue(text, "setviplink"));
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ VIP invite link updated." });
-  }
-
-  if (text.startsWith("/setcontact ") && isAdmin(env, fromId)) {
-    await setCfg(env, "contact", cmdValue(text, "setcontact"));
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Contact updated." });
-  }
-
-  // ---- Existing admin stuff ----
-  if (text === "/stats" && isAdmin(env, fromId)) {
-    const users = (await env.CONTENT.get("stats:users")) || "0";
-    const subs = (await env.CONTENT.get("stats:subs")) || "0";
-    return tg(env, "sendMessage", { chat_id: chatId, text: `📊 Stats\nUsers: ${users}\nSubscribers: ${subs}` });
-  }
-
-  if (text.startsWith("/broadcast ") && isAdmin(env, fromId)) {
-    const msgText = text.slice(11);
-    const res = await broadcast(env, msgText);
-    return tg(env, "sendMessage", {
-      chat_id: chatId,
-      text: `📣 Broadcast done\nTotal: ${res.total}\nSent: ${res.ok}\nFailed: ${res.fail}`
-    });
-  }
-
-  if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
-    const tips = text.slice(9);
-    await env.CONTENT.put("free_tips", tips);
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Free tips updated." });
-  }
-
-  if (text.startsWith("/approve ") && isAdmin(env, fromId)) {
-    const userId = text.split(/\s+/)[1];
-    const until = await setVipWeek(env, userId);
-    const vipInvite = await getCfg(env, "vipInvite", DEFAULTS.vipInvite);
-
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text:
-        "✅ Payment confirmed!\nVIP activated for 7 days.\n\n" +
-        (vipInvite ? ("VIP Channel:\n" + vipInvite) : "")
-    });
-
-    return tg(env, "sendMessage", {
-      chat_id: chatId,
-      text: "Approved " + userId + " until " + new Date(until * 1000).toUTCString()
-    });
-  }
-
-  if (text.startsWith("/deny ") && isAdmin(env, fromId)) {
-    const userId = text.split(/\s+/)[1];
-    await tg(env, "sendMessage", { chat_id: userId, text: "❌ Payment not confirmed. Please contact admin." });
-    return tg(env, "sendMessage", { chat_id: chatId, text: "Denied " + userId });
-  }
-
-  // Payment proof
-  if (msg.photo || msg.document) {
-    const target = adminTarget(env);
-
-    await tg(env, "forwardMessage", {
-      chat_id: target,
-      from_chat_id: chatId,
-      message_id: msg.message_id
-    });
-
-    await tg(env, "sendMessage", {
-      chat_id: target,
-      text:
-        "🧾 Proof received.\nUser ID: " + fromId + "\n\n" +
-        "Approve: /approve " + fromId + "\n" +
-        "Deny: /deny " + fromId
-    });
-
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Proof received. Waiting for confirmation." });
-  }
-
-  // ---- Buttons ----
-  if (text === "🆓 Free Tips") {
-    const tips = (await env.CONTENT.get("free_tips")) || "No free tips posted yet.";
-    return tg(env, "sendMessage", { chat_id: chatId, text: tips });
-  }
-
-  if (text === "🔒 VIP Tips") {
-    const until = await getVipUntil(env, fromId);
-    const vipInvite = await getCfg(env, "vipInvite", DEFAULTS.vipInvite);
-    const vipPay = await getCfg(env, "vipPay", DEFAULTS.vipPay);
-
-    if (until > nowSec()) {
-      return tg(env, "sendMessage", {
-        chat_id: chatId,
-        text:
-          "✅ VIP Active\nExpires: " + new Date(until * 1000).toUTCString() + "\n\n" +
-          (vipInvite ? ("VIP Channel:\n" + vipInvite) : "")
-      });
-    }
-
-    return tg(env, "sendMessage", {
-      chat_id: chatId,
-      text:
-        "🔒 VIP locked (7 days access)\n\n" +
-        vipPay +
-        "\n\nAfter payment, tap 🧾 Send Payment Proof and upload screenshot."
-    });
-  }
-
-  if (text === "📢 Join Channel") {
-    const link = await getCfg(env, "join", DEFAULTS.freeChannel);
-    return tg(env, "sendMessage", { chat_id: chatId, text: "📢 Free channel:\n" + link });
-  }
-
-  if (text === "🧾 Send Payment Proof") {
-    return tg(env, "sendMessage", { chat_id: chatId, text: "🧾 Upload your payment screenshot (photo or document) here." });
-  }
-
-  if (text === "🔔 Subscribe") {
-    await setSubscribed(env, fromId, true);
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Subscribed.\nTo stop: send /unsub" });
-  }
-
-  if (text === "/unsub") {
-    await setSubscribed(env, fromId, false);
-    return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Unsubscribed." });
-  }
-
-  if (text === "ℹ️ Info") {
-    const contact = await getCfg(env, "contact", DEFAULTS.contact);
-    const link = await getCfg(env, "join", DEFAULTS.freeChannel);
-    return tg(env, "sendMessage", {
-      chat_id: chatId,
-      text:
-        "ℹ️ OrangePark Tips\n\n" +
-        "Contact admin: " + contact + "\n" +
-        "Free channel: " + link
-    });
-  }
-
-  return tg(env, "sendMessage", { chat_id: chatId, text: "Type /menu" });
 }
 
 export default {
@@ -300,8 +137,192 @@ export default {
     }
 
     const update = await request.json();
-    if (update.message) await handleMessage(env, update.message);
+    const msg = update.message;
+    if (!msg) return json({ ok: true });
 
+    const chatId = msg.chat.id;
+    const fromId = msg.from?.id;
+    const text = (msg.text || "").trim();
+    if (!fromId) return json({ ok: true });
+
+    await ensureUser(env, fromId);
+
+    // --- Admin panel commands ---
+    if (text === "/start" || text === "/menu") {
+      await sendMenu(env, chatId);
+      return json({ ok: true });
+    }
+
+    if (text.startsWith("/setwelcome ") && isAdmin(env, fromId)) {
+      await setCfg(env, "welcome", cmdValue(text, "setwelcome"));
+      await tg(env, "sendMessage", { chat_id: chatId, text: "✅ Welcome updated." });
+      return json({ ok: true });
+    }
+
+    if (text.startsWith("/setjoin ") && isAdmin(env, fromId)) {
+      await setCfg(env, "join", cmdValue(text, "setjoin"));
+      await tg(env, "sendMessage", { chat_id: chatId, text: "✅ Join link updated." });
+      return json({ ok: true });
+    }
+
+    if (text.startsWith("/setprice ") && isAdmin(env, fromId)) {
+      await setCfg(env, "vipPay", cmdValue(text, "setprice"));
+      await tg(env, "sendMessage", { chat_id: chatId, text: "✅ VIP payment text updated." });
+      return json({ ok: true });
+    }
+
+    if (text.startsWith("/setviplink ") && isAdmin(env, fromId)) {
+      await setCfg(env, "vipInvite", cmdValue(text, "setviplink"));
+      await tg(env, "sendMessage", { chat_id: chatId, text: "✅ VIP link updated." });
+      return json({ ok: true });
+    }
+
+    if (text.startsWith("/setcontact ") && isAdmin(env, fromId)) {
+      await setCfg(env, "contact", cmdValue(text, "setcontact"));
+      await tg(env, "sendMessage", { chat_id: chatId, text: "✅ Contact updated." });
+      return json({ ok: true });
+    }
+
+    if (text === "/stats" && isAdmin(env, fromId)) {
+      const users = (await env.CONTENT.get("stats:users")) || "0";
+      const subs = (await env.CONTENT.get("stats:subs")) || "0";
+      await tg(env, "sendMessage", { chat_id: chatId, text: `📊 Stats\nUsers: ${users}\nSubscribers: ${subs}` });
+      return json({ ok: true });
+    }
+
+    if (text.startsWith("/broadcast ") && isAdmin(env, fromId)) {
+      const res = await broadcastText(env, text.slice(11));
+      await tg(env, "sendMessage", { chat_id: chatId, text: `📣 Broadcast: sent ${res.ok}/${res.total}` });
+      return json({ ok: true });
+    }
+
+    // ---- NEW: broadcast photo mode ----
+    if (text === "/broadcastphoto" && isAdmin(env, fromId)) {
+      await env.CONTENT.put("admin:await_photo_broadcast", "1", { expirationTtl: 10 * 60 });
+      await tg(env, "sendMessage", { chat_id: chatId, text: "📸 Send the photo now (caption optional). I will broadcast it to subscribers." });
+      return json({ ok: true });
+    }
+
+    // If admin is in photo-broadcast mode and sends a photo
+    if (isAdmin(env, fromId) && msg.photo) {
+      const awaiting = await env.CONTENT.get("admin:await_photo_broadcast");
+      if (awaiting) {
+        // biggest size is last
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        const caption = msg.caption || "";
+        await env.CONTENT.delete("admin:await_photo_broadcast");
+
+        const res = await broadcastPhoto(env, fileId, caption);
+        await tg(env, "sendMessage", { chat_id: chatId, text: `📣 Photo broadcast: sent ${res.ok}/${res.total}` });
+        return json({ ok: true });
+      }
+    }
+
+    // Admin: set free tips
+    if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
+      await env.CONTENT.put("free_tips", text.slice(9));
+      await tg(env, "sendMessage", { chat_id: chatId, text: "✅ Free tips updated." });
+      return json({ ok: true });
+    }
+
+    // Admin: approve/deny VIP
+    if (text.startsWith("/approve ") && isAdmin(env, fromId)) {
+      const userId = text.split(/\s+/)[1];
+      const until = await setVipWeek(env, userId);
+      const vipInvite = await getCfg(env, "vipInvite", DEFAULTS.vipInvite);
+
+      await tg(env, "sendMessage", {
+        chat_id: userId,
+        text: "✅ Payment confirmed!\nVIP activated for 7 days.\n\n" + (vipInvite ? ("VIP Channel:\n" + vipInvite) : "")
+      });
+
+      await tg(env, "sendMessage", {
+        chat_id: chatId,
+        text: "Approved " + userId + " until " + new Date(until * 1000).toUTCString()
+      });
+      return json({ ok: true });
+    }
+
+    if (text.startsWith("/deny ") && isAdmin(env, fromId)) {
+      const userId = text.split(/\s+/)[1];
+      await tg(env, "sendMessage", { chat_id: userId, text: "❌ Payment not confirmed. Please contact admin." });
+      await tg(env, "sendMessage", { chat_id: chatId, text: "Denied " + userId });
+      return json({ ok: true });
+    }
+
+    // Payment proof (any user photo/doc)
+    if (msg.photo || msg.document) {
+      const target = adminTarget(env);
+      await tg(env, "forwardMessage", {
+        chat_id: target,
+        from_chat_id: chatId,
+        message_id: msg.message_id
+      });
+      await tg(env, "sendMessage", {
+        chat_id: target,
+        text: "🧾 Proof received.\nUser ID: " + fromId + "\n\nApprove: /approve " + fromId + "\nDeny: /deny " + fromId
+      });
+      await tg(env, "sendMessage", { chat_id: chatId, text: "✅ Proof received. Waiting for confirmation." });
+      return json({ ok: true });
+    }
+
+    // Buttons
+    if (text === "🆓 Free Tips") {
+      const tips = (await env.CONTENT.get("free_tips")) || "No free tips posted yet.";
+      await tg(env, "sendMessage", { chat_id: chatId, text: tips });
+      return json({ ok: true });
+    }
+
+    if (text === "🔒 VIP Tips") {
+      const until = await getVipUntil(env, fromId);
+      const vipInvite = await getCfg(env, "vipInvite", DEFAULTS.vipInvite);
+      const vipPay = await getCfg(env, "vipPay", DEFAULTS.vipPay);
+
+      if (until > nowSec()) {
+        await tg(env, "sendMessage", {
+          chat_id: chatId,
+          text: "✅ VIP Active\nExpires: " + new Date(until * 1000).toUTCString() + "\n\n" + (vipInvite ? ("VIP Channel:\n" + vipInvite) : "")
+        });
+      } else {
+        await tg(env, "sendMessage", {
+          chat_id: chatId,
+          text: "🔒 VIP locked (7 days access)\n\n" + vipPay + "\n\nAfter payment, tap 🧾 Send Payment Proof and upload screenshot."
+        });
+      }
+      return json({ ok: true });
+    }
+
+    if (text === "📢 Join Channel") {
+      const link = await getCfg(env, "join", DEFAULTS.freeChannel);
+      await tg(env, "sendMessage", { chat_id: chatId, text: "📢 Free channel:\n" + link });
+      return json({ ok: true });
+    }
+
+    if (text === "🧾 Send Payment Proof") {
+      await tg(env, "sendMessage", { chat_id: chatId, text: "🧾 Upload your payment screenshot (photo or document) here." });
+      return json({ ok: true });
+    }
+
+    if (text === "🔔 Subscribe") {
+      await setSubscribed(env, fromId, true);
+      await tg(env, "sendMessage", { chat_id: chatId, text: "✅ Subscribed.\nTo stop: send /unsub" });
+      return json({ ok: true });
+    }
+
+    if (text === "/unsub") {
+      await setSubscribed(env, fromId, false);
+      await tg(env, "sendMessage", { chat_id: chatId, text: "✅ Unsubscribed." });
+      return json({ ok: true });
+    }
+
+    if (text === "ℹ️ Info") {
+      const contact = await getCfg(env, "contact", DEFAULTS.contact);
+      const link = await getCfg(env, "join", DEFAULTS.freeChannel);
+      await tg(env, "sendMessage", { chat_id: chatId, text: "ℹ️ OrangePark Tips\n\nContact admin: " + contact + "\nFree channel: " + link });
+      return json({ ok: true });
+    }
+
+    await tg(env, "sendMessage", { chat_id: chatId, text: "Type /menu" });
     return json({ ok: true });
   }
 };
