@@ -28,6 +28,11 @@ async function tg(env, method, payload) {
 function nowSec() { return Math.floor(Date.now() / 1000); }
 function isAdmin(env, userId) { return String(userId) === String(env.ADMIN_ID); }
 
+function adminTarget(env) {
+  // Prefer group (more reliable), fallback to your user id
+  return env.ADMIN_GROUP_ID ? Number(env.ADMIN_GROUP_ID) : Number(env.ADMIN_ID);
+}
+
 async function getVipUntil(env, userId) {
   const v = await env.VIP.get(`vip:${userId}`);
   return v ? Number(v) : 0;
@@ -63,14 +68,12 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "Chat ID: " + String(chatId) });
   }
 
-  // Admin: update free tips
   if (text.startsWith("/setfree ") && isAdmin(env, fromId)) {
     const tips = text.slice(9);
     await env.CONTENT.put("free_tips", tips);
     return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Free tips updated." });
   }
 
-  // Admin: approve / deny
   if (text.startsWith("/approve ") && isAdmin(env, fromId)) {
     const userId = text.split(/\s+/)[1];
     const until = await setVipWeek(env, userId);
@@ -96,15 +99,16 @@ async function handleMessage(env, msg) {
 
   // Payment proof
   if (msg.photo || msg.document) {
-    // forward to admin user id
+    const target = adminTarget(env);
+
     await tg(env, "forwardMessage", {
-      chat_id: env.ADMIN_ID,
+      chat_id: target,
       from_chat_id: chatId,
       message_id: msg.message_id
     });
 
     await tg(env, "sendMessage", {
-      chat_id: env.ADMIN_ID,
+      chat_id: target,
       text:
         "🧾 Proof received.\nUser ID: " + fromId + "\n\n" +
         "Approve: /approve " + fromId + "\n" +
@@ -114,7 +118,6 @@ async function handleMessage(env, msg) {
     return tg(env, "sendMessage", { chat_id: chatId, text: "✅ Proof received. Waiting for confirmation." });
   }
 
-  // Buttons
   if (text === "🆓 Free Tips") {
     const tips = (await env.CONTENT.get("free_tips")) || "No free tips posted yet.";
     return tg(env, "sendMessage", { chat_id: chatId, text: tips });
