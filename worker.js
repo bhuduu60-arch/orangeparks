@@ -1,11 +1,21 @@
 const MENU = {
-  inline_keyboard: [[
-    { text: "Free Tips", callback_data: "FREE" },
-    { text: "VIP Tips (Locked)", callback_data: "VIP" }
-  ],[
-    { text: "Join Channel", callback_data: "JOIN" },
-    { text: "Send Payment Proof", callback_data: "PROOF" }
-  ]]
+  keyboard: [
+    [{ text: "🆓 Free Tips" }, { text: "🔒 VIP Tips" }],
+    [{ text: "📢 Join Channel" }, { text: "🧾 Send Payment Proof" }]
+  ],
+  resize_keyboard: true,
+  one_time_keyboard: false
+};
+
+const TEXT = {
+  welcome:
+    "🍊 *OrangePark Tips*\n" +
+    "Your home of smart picks.\n\n" +
+    "Choose an option below:",
+  payHow:
+    "💳 *VIP Payment*\n" +
+    "Send payment, then upload a screenshot here.\n\n" +
+    "After you send proof, wait for admin confirmation."
 };
 
 function json(data, status = 200) {
@@ -38,31 +48,30 @@ async function setVipWeek(env, userId) {
   return until;
 }
 
+async function sendMenu(env, chatId) {
+  return tg("sendMessage", env.TELEGRAM_BOT_TOKEN, {
+    chat_id: chatId,
+    text: TEXT.welcome,
+    parse_mode: "Markdown",
+    reply_markup: MENU
+  });
+}
+
 async function handleMessage(env, msg) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const chatId = msg.chat.id;
   const fromId = msg.from.id;
-  const text = msg.text || "";
+  const text = (msg.text || "").trim();
 
   if (text === "/start" || text === "/menu") {
-    return tg("sendMessage", token, {
-      chat_id: chatId,
-      text: "Welcome to OrangePark Tips.\nChoose an option:",
-      reply_markup: MENU
-    });
+    return sendMenu(env, chatId);
   }
 
+  // Admin commands
   if (text.startsWith("/approve ") && isAdmin(env, fromId)) {
-    const parts = text.trim().split(/\s+/);
-    const userId = parts[1];
-    if (!userId) {
-      return tg("sendMessage", token, { chat_id: chatId, text: "Usage: /approve USER_ID" });
-    }
+    const userId = text.split(/\s+/)[1];
     const until = await setVipWeek(env, userId);
-    await tg("sendMessage", token, {
-      chat_id: userId,
-      text: "Payment confirmed. You are VIP for 7 days."
-    });
+    await tg("sendMessage", token, { chat_id: userId, text: "✅ VIP activated for 7 days." });
     return tg("sendMessage", token, {
       chat_id: chatId,
       text: `Approved ${userId}. VIP until ${new Date(until * 1000).toUTCString()}`
@@ -70,13 +79,13 @@ async function handleMessage(env, msg) {
   }
 
   if (text.startsWith("/deny ") && isAdmin(env, fromId)) {
-    const parts = text.trim().split(/\s+/);
-    const userId = parts[1];
+    const userId = text.split(/\s+/)[1];
+    await tg("sendMessage", token, { chat_id: userId, text: "❌ Payment not confirmed. Please contact admin." });
     return tg("sendMessage", token, { chat_id: chatId, text: `Denied ${userId}.` });
   }
 
-  // If user sends photo as proof: forward to admin and tell them their user id.
-  if (msg.photo) {
+  // Payment proof: photo/document
+  if (msg.photo || msg.document) {
     await tg("forwardMessage", token, {
       chat_id: env.ADMIN_ID,
       from_chat_id: chatId,
@@ -84,70 +93,54 @@ async function handleMessage(env, msg) {
     });
     await tg("sendMessage", token, {
       chat_id: env.ADMIN_ID,
-      text:
-        `Payment proof received.\nUser ID: ${fromId}\nReply with:\n/approve ${fromId}\nor\n/deny ${fromId}`
+      text: `🧾 Proof received.\nUser ID: ${fromId}\nApprove: /approve ${fromId}\nDeny: /deny ${fromId}`
     });
-    return tg("sendMessage", token, {
-      chat_id: chatId,
-      text: "Proof received. Waiting for confirmation."
-    });
+    return tg("sendMessage", token, { chat_id: chatId, text: "✅ Proof received. Waiting for confirmation." });
   }
 
-  return tg("sendMessage", token, {
-    chat_id: chatId,
-    text: "Type /menu to see options."
-  });
-}
-
-async function handleCallback(env, cb) {
-  const token = env.TELEGRAM_BOT_TOKEN;
-  const data = cb.data;
-  const chatId = cb.message.chat.id;
-  const userId = cb.from.id;
-
-  // remove loading spinner
-  await tg("answerCallbackQuery", token, { callback_query_id: cb.id });
-
-  if (data === "JOIN") {
-    return tg("sendMessage", token, {
-      chat_id: chatId,
-      text: "Join our free channel:\nhttps://t.me/toxicpuntertips"
-    });
-  }
-
-  if (data === "FREE") {
+  // Menu actions (reply keyboard sends normal text messages)
+  if (text === "🆓 Free Tips") {
     const tips = (await env.CONTENT.get("free_tips")) || "No free tips posted yet.";
     return tg("sendMessage", token, { chat_id: chatId, text: tips });
   }
 
-  if (data === "VIP") {
-    const until = await getVipUntil(env, userId);
+  if (text === "🔒 VIP Tips") {
+    const until = await getVipUntil(env, fromId);
     if (until > nowSec()) {
-      const vip = (await env.CONTENT.get("vip_tips")) || "No VIP tips posted yet.";
-      return tg("sendMessage", token, { chat_id: chatId, text: vip });
+      // VIP channel invite link
+      const link = env.VIP_CHANNEL_INVITE || "";
+      if (link) {
+        return tg("sendMessage", token, {
+          chat_id: chatId,
+          text: `✅ VIP Active.\nHere is your VIP channel link:\n${link}`
+        });
+      }
+      return tg("sendMessage", token, { chat_id: chatId, text: "✅ VIP Active, but VIP link not configured yet." });
     }
+    return tg("sendMessage", token, { chat_id: chatId, text: "🔒 VIP is locked.\n\n" + TEXT.payHow, parse_mode: "Markdown" });
+  }
+
+  if (text === "📢 Join Channel") {
     return tg("sendMessage", token, {
       chat_id: chatId,
-      text:
-        "VIP is locked.\nSend payment, then tap 'Send Payment Proof' and upload screenshot."
+      text: "📢 Join our free channel:\nhttps://t.me/toxicpuntertips"
     });
   }
 
-  if (data === "PROOF") {
+  if (text === "🧾 Send Payment Proof") {
     return tg("sendMessage", token, {
       chat_id: chatId,
-      text: "Upload your payment screenshot here in this chat."
+      text: "🧾 Please upload your payment screenshot (photo or document) in this chat."
     });
   }
 
-  return tg("sendMessage", token, { chat_id: chatId, text: "Unknown option." });
+  return tg("sendMessage", token, { chat_id: chatId, text: "Type /menu" });
 }
 
 export default {
   async fetch(request, env) {
     if (request.method !== "POST") return json({ ok: true });
 
-    // optional simple secret check for Telegram webhook
     const secret = env.TELEGRAM_SECRET;
     if (secret) {
       const got = request.headers.get("x-telegram-bot-api-secret-token") || "";
@@ -155,9 +148,7 @@ export default {
     }
 
     const update = await request.json();
-
     if (update.message) await handleMessage(env, update.message);
-    if (update.callback_query) await handleCallback(env, update.callback_query);
 
     return json({ ok: true });
   }
